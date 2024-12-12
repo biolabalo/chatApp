@@ -1,9 +1,9 @@
-'use client';
-
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+"use client";
+import { useSocket } from "@/contexts/SocketContext";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardHeader,
@@ -11,28 +11,62 @@ import {
   CardDescription,
   CardContent,
   CardFooter,
-} from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
-import { MessageSquarePlus, LogIn } from 'lucide-react';
-import { useChatStore } from '@/store/chatStore';
+} from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { MessageSquarePlus, LogIn } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { CreateRoomResponse } from "@/interfaces";
+import { useChatStore } from "@/store/chatStore"; // Add this import
+import { useEffect } from "react";
 
 export default function HomeClient() {
+  const { socket, isConnected } = useSocket();
   const router = useRouter();
-  const setUsername = useChatStore((state) => state.setUsername);
-  const [username, setUsernameLocal] = useState('');
-  const [roomId, setRoomId] = useState('');
 
-  const createRoom = () => {
-    if (!username.trim()) return;
-    const newRoomId = Math.random().toString(36).substring(7);
-    setUsername(username);
-    router.push(`/chat/${newRoomId}`);
+  const [username, setUsername] = useState("");
+  const [roomId, setRoomId] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const setCurrentUser = useChatStore((state) => state?.setCurrentUser);
+
+  const handleError = (error: string) => {
+    setIsLoading(false);
+    alert(error);
   };
 
-  const joinRoom = () => {
-    if (!username.trim() || !roomId.trim()) return;
-    setUsername(username);
-    router.push(`/chat/${roomId}`);
+  const validateInputs = (checkRoom = false) => {
+    if (!username.trim() || username.length > 50) {
+      handleError("Username must be between 1 and 50 characters");
+      return false;
+    }
+
+    if (checkRoom && (!roomId.trim() || !/^[a-zA-Z0-9-]+$/.test(roomId))) {
+      handleError("Room ID must contain only letters, numbers, and hyphens");
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleRoomAction = async (action: "create-room" | "join-room") => {
+    if (!validateInputs(true) || !socket || !isConnected) return;
+
+    setIsLoading(true);
+    socket.emit(
+      action,
+      { username, roomId },
+      (response: CreateRoomResponse) => {
+        if (response.error) {
+          handleError(response.error);
+        } else if (response.user) {
+          // Add check for user in response
+          setCurrentUser(response.user); // Set the current user
+          setIsLoading(false);
+          router.push(`/chat/${roomId}`);
+        } else {
+          handleError("Failed to create user");
+        }
+      }
+    );
   };
 
   return (
@@ -53,8 +87,10 @@ export default function HomeClient() {
               id="username"
               placeholder="Enter your username"
               value={username}
-              onChange={(e) => setUsernameLocal(e.target.value)}
+              onChange={(e) => setUsername(e.target.value)}
+              maxLength={50}
               className="w-full"
+              disabled={isLoading}
             />
           </div>
           <div className="space-y-2">
@@ -65,34 +101,39 @@ export default function HomeClient() {
               value={roomId}
               onChange={(e) => setRoomId(e.target.value)}
               className="w-full"
+              disabled={isLoading}
             />
           </div>
         </CardContent>
         <CardFooter className="flex flex-col space-y-2">
-          <Button
-            onClick={createRoom}
-            className="w-full"
-            variant="default"
-            size="lg"
-          >
-            <MessageSquarePlus className="mr-2 h-5 w-5" />
-            Create New Room
-          </Button>
-          <Button
-            onClick={joinRoom}
-            className="w-full"
-            variant="secondary"
-            size="lg"
-          >
-            <LogIn className="mr-2 h-5 w-5" />
-            Join Existing Room
-          </Button>
+          {isConnected ? (
+            <>
+              <Button
+                onClick={() => handleRoomAction("create-room")}
+                className="w-full"
+                variant="default"
+                size="lg"
+                disabled={isLoading}
+              >
+                <MessageSquarePlus className="mr-2 h-5 w-5" />
+                {isLoading ? "Creating..." : "Create New Room"}
+              </Button>
+              <Button
+                onClick={() => handleRoomAction("join-room")}
+                className="w-full"
+                variant="secondary"
+                size="lg"
+                disabled={isLoading}
+              >
+                <LogIn className="mr-2 h-5 w-5" />
+                {isLoading ? "Joining..." : "Join Existing Room"}
+              </Button>
+            </>
+          ) : (
+            <p>Establishing socket connection.....</p>
+          )}
         </CardFooter>
       </Card>
-
-      <div className="mt-8 text-center text-sm text-muted-foreground">
-        <p>Property of Javat 365</p>
-      </div>
     </div>
   );
 }

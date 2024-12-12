@@ -1,0 +1,1063 @@
+
+================================================================
+Repository Structure
+================================================================
+.eslintrc.json
+.gitignore
+ASSESSMENT.md
+components.json
+next.config.ts
+package.json
+postcss.config.mjs
+public/file.svg
+public/globe.svg
+public/next.svg
+public/vercel.svg
+public/window.svg
+README.md
+src/app/api/socket.ts
+src/app/chat/[roomId]/page.tsx
+src/app/globals.css
+src/app/layout.tsx
+src/app/page.tsx
+src/components/ChatClient.tsx
+src/components/HomeClient.tsx
+
+src/hooks/use-toast.ts
+src/interfaces/index.ts
+src/lib/socket.ts
+src/lib/utils.ts
+src/pages/api/socket.ts
+src/store/chatStore.ts
+tailwind.config.ts
+tsconfig.json
+
+================================================================
+Repository Files
+================================================================
+
+
+
+
+================
+File: src/app/chat/[roomId]/page.tsx
+================
+import ChatClient from '@/components/ChatClient';
+
+export default function ChatRoom() {
+  return <ChatClient />;
+}
+
+
+
+================
+File: src/app/page.tsx
+================
+import HomeClient from "@/components/HomeClient";
+
+export default function Home() {
+  return <HomeClient />;
+}
+
+================
+File: src/components/ChatClient.tsx
+================
+'use client';
+'use client';
+
+import { useEffect, useState, useRef } from 'react';
+import { useRouter, useParams } from 'next/navigation';
+import { io, Socket } from 'socket.io-client';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card } from '@/components/ui/card';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import {
+  LogOut,
+  Send,
+  Copy,
+  Plus,
+  MessageSquare,
+  Users,
+  Settings,
+} from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+import { useChatStore } from '@/store/chatStore';
+import { UserList } from '@/components/UserList';
+import { RoomSettings } from '@/components/RoomSettings';
+import { Message, User, Room } from '@/interfaces';
+import { useDebounce } from '@/hooks/useDebounce';
+
+
+let socket: Socket;
+
+export default function ChatClient() {
+  const router = useRouter();
+  const params = useParams();
+  const { toast } = useToast();
+  const roomId = params.roomId as string;
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  
+  const {
+    currentUser,
+    rooms,
+    activeRoomId,
+    messages,
+    typingUsers,
+    unreadCounts,
+    setActiveRoom,
+    addMessage,
+    setUserTyping,
+    addRoom,
+    removeRoom,
+  } = useChatStore();
+  
+  const [message, setMessage] = useState('');
+
+  const [isTyping, setIsTyping] = useState(false);
+  const [showUserList, setShowUserList] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  
+  const debouncedIsTyping = useDebounce(isTyping, 1000);
+ 
+
+  useEffect(() => {
+    if (!roomId || !currentUser) {
+      router.push('/');
+      return;
+    }
+
+    socket = io(process.env.NEXT_PUBLIC_SOCKET_URL || '', {
+      path: '/api/socket',
+    });
+
+    // Log connection success
+    socket.on('connect', () => {
+      socket.emit('join-room', roomId, currentUser);
+    });
+
+    socket.on('room-state', (room: Room) => {
+      addRoom(room);
+      setActiveRoom(room.id);
+    });
+
+    socket.on('receive-message', (msg: Message) => {
+      addMessage(roomId, msg);
+    });
+
+    socket.on('typing-update', (username: string, isTyping: boolean) => {
+      setUserTyping(roomId, username, isTyping);
+    });
+
+    socket.on('user-joined', (msg: Message) => {
+      addMessage(roomId, msg);
+    });
+
+    socket.on('user-left', (msg: Message) => {
+      addMessage(roomId, msg);
+    });
+
+    socket.on('room-deleted', () => {
+      removeRoom(roomId);
+      router.push('/');
+    });
+
+    socket.on('user-kicked', (userId: string) => {
+      if (currentUser?.id === userId) {
+        router.push('/');
+      }
+    });
+
+   
+
+    return () => {
+      if (currentUser) {
+        socket.emit('leave-room', roomId, currentUser);
+      }
+      socket.disconnect();
+    };
+  }, [roomId, currentUser]);
+
+
+   // Handle typing indicator
+   useEffect(() => {
+    if (currentUser) {
+      socket.emit('user-typing', roomId, currentUser, debouncedIsTyping);
+    }
+  }, [debouncedIsTyping, roomId, currentUser]);
+
+
+   // Auto scroll to bottom on new messages
+   useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
+    }
+  }, [messages]);
+
+  const handleMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMessage(e.target.value);
+    setIsTyping(e.target.value.length > 0);
+  };
+
+  const sendMessage = () => {
+    if (!message.trim() || !currentUser) return;
+    
+    const newMessage: Message = {
+      id: Math.random().toString(),
+      type: 'chat',
+      content: message,
+      username: currentUser.username,
+      timestamp: new Date(),
+      roomId,
+    };
+    
+    addMessage(roomId, newMessage);
+    socket.emit('send-message', roomId, newMessage);
+    setMessage('');
+    setIsTyping(false);
+  };
+
+  const leaveRoom = () => {
+    router.push('/');
+  };
+
+  const copyRoomId = () => {
+    navigator.clipboard.writeText(roomId);
+    toast({
+      title: 'Room ID copied!',
+      description: 'Share this with others to join the chat.',
+    });
+  };
+
+  const currentRoom = rooms.get(roomId);
+  const roomMessages = messages.get(roomId) || [];
+  const currentTypingUsers = Array.from(typingUsers.get(roomId) || [])
+    .filter(username => username !== currentUser?.username);
+
+  return (
+    <div className="h-[calc(100vh)]">
+      <div className="grid grid-cols-12 h-full">
+        {/* Sidebar */}
+        <Card className="col-span-3 flex flex-col h-full rounded-none">
+          <div className="p-4 border-b">
+            <h2 className="font-semibold text-lg mb-4">Your Chats</h2>
+             <Button
+              className="w-full"
+              variant="outline"
+              onClick={() => router.push('/')}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Join New Room
+            </Button>
+          </div>
+          <ScrollArea className="flex-1">
+            <div className="p-2">
+              {Array.from(rooms.values()).map((room) => (
+                <div key={room?.id}>
+                  <Button
+                    variant={room?.id === activeRoomId ? 'secondary' : 'ghost'}
+                    className="w-full justify-start mb-1"
+                    onClick={() => router.push(`/chat/${room?.id}`)}
+                  >
+                    <MessageSquare className="h-4 w-4 mr-2" />
+                    <span className="flex-1 text-left">{room?.name}</span>
+                    {unreadCounts.get(room?.id) ? (
+                      <span className="bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-xs">
+                        {unreadCounts.get(room?.id)}
+                      </span>
+                    ) : null}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+          <Separator />
+          <div className="p-4">
+            <div className="flex items-center space-x-2">
+              <div className="flex-1">
+                <p className="text-sm font-medium">Logged in as:</p>
+                <p className="text-sm text-muted-foreground">
+                  {currentUser?.username}
+                </p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={leaveRoom}>
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </Card>
+
+       {/* Main Chat Area */}
+       <Card className="col-span-9 flex flex-col h-full rounded-none">
+          {/* Header */}
+          <div className="p-4 border-b flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <div>
+                <h2 className="text-2xl font-bold">
+                  {currentRoom?.name || 'Chat Room'}
+                </h2>
+                <div className="flex items-center space-x-2">
+                  <code className="text-sm text-muted-foreground">
+                    {roomId}
+                  </code>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={copyRoomId}
+                    className="h-8 w-8"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowUserList(true)}
+              >
+                <Users className="h-5 w-5" />
+              </Button>
+              {currentRoom?.ownerId === currentUser?.id && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowSettings(true)}
+                >
+                  <Settings className="h-5 w-5" />
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Messages Area */}
+          <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+            <div className="space-y-4">
+              {roomMessages.map((msg) => (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={`flex flex-col ${
+                    msg.username === currentUser?.username
+                      ? 'items-end'
+                      : 'items-start'
+                  }`}
+                >
+                  {msg.type === 'notification' ? (
+                    <div className="bg-muted px-3 py-2 rounded-md text-sm text-muted-foreground">
+                      {msg.content}
+                    </div>
+                  ) : (
+                    <div
+                      className={`max-w-[80%] rounded-lg p-3 ${
+                        msg.username === currentUser?.username
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-muted'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2">
+                        <p className="font-semibold text-sm">
+                          {msg.username === currentUser?.username
+                            ? 'You'
+                            : msg.username}
+                        </p>
+                        <span className="text-xs opacity-70">
+                          {new Date(msg.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <p className="mt-1">{msg.content}</p>
+                    </div>
+                  )}
+                </motion.div>
+              ))}
+            </div>
+
+            {/* Typing Indicator */}
+            <AnimatePresence>
+              {currentTypingUsers.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="text-sm text-muted-foreground mt-2"
+                >
+                  {currentTypingUsers.join(', ')} {currentTypingUsers.length === 1 ? 'is' : 'are'} typing...
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </ScrollArea>
+
+          {/* Input Area */}
+          <div className="p-4 border-t">
+            <div className="flex space-x-2">
+              <Input
+                value={message}
+                onChange={handleMessageChange}
+                onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+                placeholder="Type your message..."
+                className="flex-1 h-14"
+              />
+              <Button onClick={sendMessage} className="h-14">
+                <Send className="h-4 w-4 mr-2" />
+                Send
+              </Button>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* Modals */}
+      <UserList
+        open={showUserList}
+        onOpenChange={setShowUserList}
+        room={currentRoom}
+        currentUser={currentUser}
+        socket={socket}
+      />
+      
+      <RoomSettings
+        open={showSettings}
+        onOpenChange={setShowSettings}
+        room={currentRoom}
+        currentUser={currentUser}
+        socket={socket}
+      />
+    </div>
+  );
+}
+
+
+
+================
+File: src/components/HomeClient.tsx
+================
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+} from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { MessageSquarePlus, LogIn } from 'lucide-react';
+import { useChatStore } from '@/store/chatStore';
+
+export default function HomeClient() {
+  const router = useRouter();
+  const setUsername = useChatStore((state) => state.setUsername);
+  const [username, setUsernameLocal] = useState('');
+  const [roomId, setRoomId] = useState('');
+
+  const createRoom = () => {
+    if (!username.trim()) return;
+    const newRoomId = Math.random().toString(36).substring(7);
+    setUsername(username);
+    router.push(`/chat/${newRoomId}`);
+  };
+
+  const joinRoom = () => {
+    if (!username.trim() || !roomId.trim()) return;
+    setUsername(username);
+    router.push(`/chat/${roomId}`);
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)]">
+      <Card className="w-full max-w-md shadow-lg">
+        <CardHeader className="text-center">
+          <CardTitle className="text-3xl font-bold">
+            Welcome to JoyRoom
+          </CardTitle>
+          <CardDescription>
+            Create a new room or join an existing one to start chatting
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="username">Username</Label>
+            <Input
+              id="username"
+              placeholder="Enter your username"
+              value={username}
+              onChange={(e) => setUsernameLocal(e.target.value)}
+              className="w-full"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="roomId">Room ID</Label>
+            <Input
+              id="roomId"
+              placeholder="Enter room ID to join"
+              value={roomId}
+              onChange={(e) => setRoomId(e.target.value)}
+              className="w-full"
+            />
+          </div>
+        </CardContent>
+        <CardFooter className="flex flex-col space-y-2">
+          <Button
+            onClick={createRoom}
+            className="w-full"
+            variant="default"
+            size="lg"
+          >
+            <MessageSquarePlus className="mr-2 h-5 w-5" />
+            Create New Room
+          </Button>
+          <Button
+            onClick={joinRoom}
+            className="w-full"
+            variant="secondary"
+            size="lg"
+          >
+            <LogIn className="mr-2 h-5 w-5" />
+            Join Existing Room
+          </Button>
+        </CardFooter>
+      </Card>
+
+      <div className="mt-8 text-center text-sm text-muted-foreground">
+        <p>Property of Javat 365</p>
+      </div>
+    </div>
+  );
+}
+
+
+================
+File: src/hooks/use-mobile.tsx
+================
+import * as React from "react"
+
+const MOBILE_BREAKPOINT = 768
+
+export function useIsMobile() {
+  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
+
+  React.useEffect(() => {
+    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
+    const onChange = () => {
+      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+    }
+    mql.addEventListener("change", onChange)
+    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+    return () => mql.removeEventListener("change", onChange)
+  }, [])
+
+  return !!isMobile
+}
+
+================
+File: src/hooks/useDebounce.ts
+================
+import { useState, useEffect } from 'react';
+
+export function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+================
+File: src/hooks/use-toast.ts
+================
+"use client"
+
+// Inspired by react-hot-toast library
+import * as React from "react"
+
+import type {
+  ToastActionElement,
+  ToastProps,
+} from "@/components/ui/toast"
+
+const TOAST_LIMIT = 1
+const TOAST_REMOVE_DELAY = 1000000
+
+type ToasterToast = ToastProps & {
+  id: string
+  title?: React.ReactNode
+  description?: React.ReactNode
+  action?: ToastActionElement
+}
+
+const actionTypes = {
+  ADD_TOAST: "ADD_TOAST",
+  UPDATE_TOAST: "UPDATE_TOAST",
+  DISMISS_TOAST: "DISMISS_TOAST",
+  REMOVE_TOAST: "REMOVE_TOAST",
+} as const
+
+let count = 0
+
+function genId() {
+  count = (count + 1) % Number.MAX_SAFE_INTEGER
+  return count.toString()
+}
+
+type ActionType = typeof actionTypes
+
+type Action =
+  | {
+      type: ActionType["ADD_TOAST"]
+      toast: ToasterToast
+    }
+  | {
+      type: ActionType["UPDATE_TOAST"]
+      toast: Partial<ToasterToast>
+    }
+  | {
+      type: ActionType["DISMISS_TOAST"]
+      toastId?: ToasterToast["id"]
+    }
+  | {
+      type: ActionType["REMOVE_TOAST"]
+      toastId?: ToasterToast["id"]
+    }
+
+interface State {
+  toasts: ToasterToast[]
+}
+
+const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+
+const addToRemoveQueue = (toastId: string) => {
+  if (toastTimeouts.has(toastId)) {
+    return
+  }
+
+  const timeout = setTimeout(() => {
+    toastTimeouts.delete(toastId)
+    dispatch({
+      type: "REMOVE_TOAST",
+      toastId: toastId,
+    })
+  }, TOAST_REMOVE_DELAY)
+
+  toastTimeouts.set(toastId, timeout)
+}
+
+export const reducer = (state: State, action: Action): State => {
+  switch (action.type) {
+    case "ADD_TOAST":
+      return {
+        ...state,
+        toasts: [action.toast, ...state.toasts].slice(0, TOAST_LIMIT),
+      }
+
+    case "UPDATE_TOAST":
+      return {
+        ...state,
+        toasts: state.toasts.map((t) =>
+          t.id === action.toast.id ? { ...t, ...action.toast } : t
+        ),
+      }
+
+    case "DISMISS_TOAST": {
+      const { toastId } = action
+
+      // ! Side effects ! - This could be extracted into a dismissToast() action,
+      // but I'll keep it here for simplicity
+      if (toastId) {
+        addToRemoveQueue(toastId)
+      } else {
+        state.toasts.forEach((toast) => {
+          addToRemoveQueue(toast.id)
+        })
+      }
+
+      return {
+        ...state,
+        toasts: state.toasts.map((t) =>
+          t.id === toastId || toastId === undefined
+            ? {
+                ...t,
+                open: false,
+              }
+            : t
+        ),
+      }
+    }
+    case "REMOVE_TOAST":
+      if (action.toastId === undefined) {
+        return {
+          ...state,
+          toasts: [],
+        }
+      }
+      return {
+        ...state,
+        toasts: state.toasts.filter((t) => t.id !== action.toastId),
+      }
+  }
+}
+
+const listeners: Array<(state: State) => void> = []
+
+let memoryState: State = { toasts: [] }
+
+function dispatch(action: Action) {
+  memoryState = reducer(memoryState, action)
+  listeners.forEach((listener) => {
+    listener(memoryState)
+  })
+}
+
+type Toast = Omit<ToasterToast, "id">
+
+function toast({ ...props }: Toast) {
+  const id = genId()
+
+  const update = (props: ToasterToast) =>
+    dispatch({
+      type: "UPDATE_TOAST",
+      toast: { ...props, id },
+    })
+  const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
+
+  dispatch({
+    type: "ADD_TOAST",
+    toast: {
+      ...props,
+      id,
+      open: true,
+      onOpenChange: (open) => {
+        if (!open) dismiss()
+      },
+    },
+  })
+
+  return {
+    id: id,
+    dismiss,
+    update,
+  }
+}
+
+function useToast() {
+  const [state, setState] = React.useState<State>(memoryState)
+
+  React.useEffect(() => {
+    listeners.push(setState)
+    return () => {
+      const index = listeners.indexOf(setState)
+      if (index > -1) {
+        listeners.splice(index, 1)
+      }
+    }
+  }, [state])
+
+  return {
+    ...state,
+    toast,
+    dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
+  }
+}
+
+export { useToast, toast }
+
+================
+File: src/interfaces/index.ts
+================
+export interface User {
+    id: string;
+    username: string;
+    avatar: string;
+    color: string;
+  }
+  
+  export interface Room {
+    id: string;
+    name: string;
+    ownerId: string;
+    users: User[];
+    createdAt: Date;
+    lastActivity: Date;
+  }
+  
+  export interface Message {
+    id: string;
+    type: 'chat' | 'system' | 'notification';
+    content: string;
+    username: string;
+    timestamp: Date;
+    roomId: string;
+  }
+  
+  export interface ChatStore {
+    // User state
+    currentUser: User | null;
+    setCurrentUser: (user: User) => void;
+    
+    // Rooms state
+    rooms: Map<string, Room>;
+    activeRoomId: string | null;
+    setActiveRoom: (roomId: string) => void;
+    addRoom: (room: Room) => void;
+    removeRoom: (roomId: string) => void;
+    
+    // Messages state
+    messages: Map<string, Message[]>;
+    addMessage: (roomId: string, message: Message) => void;
+    clearMessages: (roomId: string) => void;
+    
+    // Typing indicator state
+    typingUsers: Map<string, Set<string>>;
+    setUserTyping: (roomId: string, username: string, isTyping: boolean) => void;
+    
+    // Unread counts
+    unreadCounts: Map<string, number>;
+    incrementUnread: (roomId: string) => void;
+    clearUnread: (roomId: string) => void;
+  }
+
+================
+File: src/lib/socket.ts
+================
+import { io } from 'socket.io-client';
+
+export const socket = io(
+  process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001',
+  {
+    autoConnect: false,
+  }
+);
+
+================
+File: src/lib/utils.ts
+================
+import { clsx, type ClassValue } from "clsx"
+import { twMerge } from "tailwind-merge"
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}
+
+================
+File: src/pages/api/socket.ts
+================
+import { NextApiRequest, NextApiResponse } from "next";
+import { Server } from "socket.io";
+import type { User, Room, Message } from "@/interfaces";
+
+const rooms = new Map<string, Room>();
+
+const SocketHandler = (req: NextApiRequest, res: NextApiResponse) => {
+  if (res.socket?.server?.io) {
+    return res.end();
+  }
+
+  const io = new Server(res.socket?.server, {
+    path: "/api/socket",
+  });
+  res.socket.server.io = io;
+
+  io.on("connection", (socket) => {
+    console.log("backend socket connected>>>>>>>>>>>>>>>>>>");
+    socket.on("join-room", (roomId: string, user: User) => {
+      let room = rooms.get(roomId);
+
+      if (!room) {
+        room = {
+          id: roomId,
+          name: `Room ${roomId}`,
+          ownerId: user.id,
+          users: [],
+          createdAt: new Date(),
+          lastActivity: new Date(),
+        };
+        rooms.set(roomId, room);
+      }
+
+      room.users.push(user);
+      socket.join(roomId);
+
+      // Notify others
+      io.to(roomId).emit("user-joined", {
+        type: "notification",
+        content: `${user.username} joined the room`,
+        username: "System",
+        timestamp: new Date(),
+        roomId,
+      });
+
+      // Send current room state
+      socket.emit("room-state", room);
+    });
+
+    // Handle typing indicators
+    socket.on(
+      "user-typing",
+      (roomId: string, user: User, isTyping: boolean) => {
+        socket.to(roomId).emit("typing-update", user.username, isTyping);
+      }
+    );
+
+    // Handle messages
+    socket.on("send-message", (roomId: string, message: Message) => {
+      const room = rooms.get(roomId);
+      if (room) {
+        room.lastActivity = new Date();
+        io.to(roomId).emit("receive-message", message);
+      }
+    });
+
+    // Handle user leaving
+    socket.on("leave-room", (roomId: string, user: User) => {
+      const room = rooms.get(roomId);
+      if (room) {
+        // Remove user from room
+        room.users = room.users.filter((u) => u.id !== user.id);
+
+        // If room is empty, delete it
+        if (room.users.length === 0) {
+          rooms.delete(roomId);
+          io.to(roomId).emit("room-deleted");
+        }
+        // If owner left, transfer ownership
+        else if (room.ownerId === user.id) {
+          room.ownerId = room.users[0].id;
+          io.to(roomId).emit("owner-changed", room.ownerId);
+        }
+
+        socket.leave(roomId);
+        io.to(roomId).emit("user-left", {
+          type: "notification",
+          content: `${user.username} left the room`,
+          username: "System",
+          timestamp: new Date(),
+          roomId,
+        });
+      }
+    });
+
+      // Handle room management
+      socket.on('kick-user', (roomId: string, userId: string, ownerId: string) => {
+        const room = rooms.get(roomId);
+        if (room && room.ownerId === ownerId) {
+          const user = room.users.find(u => u.id === userId);
+          if (user) {
+            io.to(roomId).emit('user-kicked', userId);
+            socket.to(roomId).emit('user-left', {
+              type: 'notification',
+              content: `${user.username} was removed from the room`,
+              username: 'System',
+              timestamp: new Date(),
+              roomId
+            });
+          }
+        }
+      });
+      
+  });
+
+  res.end();
+};
+
+export default SocketHandler;
+
+================
+File: src/store/chatStore.ts
+================
+import { create } from 'zustand';
+import type { User, Room, Message } from '@/interfaces';
+
+const getRandomColor = () => {
+  const colors = ['red', 'blue', 'green', 'purple', 'orange', 'teal'];
+  return colors[Math.floor(Math.random() * colors.length)];
+};
+
+const getRandomAvatar = () => {
+  return `https://api.dicebear.com/6.x/avataaars/svg?seed=${Math.random()}`;
+};
+
+export const useChatStore = create<ChatStore>((set, get) => ({
+  currentUser: null,
+  setCurrentUser: (user) => set({ currentUser: user }),
+  
+  rooms: new Map(),
+  activeRoomId: null,
+  setActiveRoom: (roomId) => {
+    set({ activeRoomId: roomId });
+    get().clearUnread(roomId);
+  },
+  addRoom: (room) => set((state) => ({
+    rooms: new Map(state.rooms).set(room.id, room)
+  })),
+  removeRoom: (roomId) => set((state) => {
+    const newRooms = new Map(state.rooms);
+    newRooms.delete(roomId);
+    return { rooms: newRooms };
+  }),
+  
+  messages: new Map(),
+  addMessage: (roomId, message) => set((state) => {
+    const roomMessages = state.messages.get(roomId) || [];
+    const newMessages = new Map(state.messages);
+    newMessages.set(roomId, [...roomMessages, message]);
+    
+    // Increment unread count if not active room
+    if (roomId !== state.activeRoomId) {
+      get().incrementUnread(roomId);
+    }
+    
+    return { messages: newMessages };
+  }),
+  clearMessages: (roomId) => set((state) => {
+    const newMessages = new Map(state.messages);
+    newMessages.delete(roomId);
+    return { messages: newMessages };
+  }),
+  
+  typingUsers: new Map(),
+  setUserTyping: (roomId, username, isTyping) => set((state) => {
+    const roomTyping = new Set(state.typingUsers.get(roomId) || []);
+    if (isTyping) {
+      roomTyping.add(username);
+    } else {
+      roomTyping.delete(username);
+    }
+    return {
+      typingUsers: new Map(state.typingUsers).set(roomId, roomTyping)
+    };
+  }),
+  
+  unreadCounts: new Map(),
+  incrementUnread: (roomId) => set((state) => {
+    const count = (state.unreadCounts.get(roomId) || 0) + 1;
+    return {
+      unreadCounts: new Map(state.unreadCounts).set(roomId, count)
+    };
+  }),
+  clearUnread: (roomId) => set((state) => {
+    const newCounts = new Map(state.unreadCounts);
+    newCounts.delete(roomId);
+    return { unreadCounts: newCounts };
+  }),
+}));
+
